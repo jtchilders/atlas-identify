@@ -41,9 +41,10 @@ class BatchGenerator(Sequence):
       self.shuffle = self.config['data_handling']['shuffle']
 
       self.n_chan,self.img_h,self.img_w = tuple(config['data_handling']['image_shape'])
+      self.image_shape = tuple(config['data_handling']['image_shape'])
    
 
-      self.evts_per_file      = config['data_handling']['evt_per_file']
+      self.evts_per_file      = 1
       self.nevts              = len(self.filelist) * self.evts_per_file
       self.batch_size         = config['training']['batch_size']
       self.n_classes          = len(config['data_handling']['classes'])
@@ -62,6 +63,21 @@ class BatchGenerator(Sequence):
       logger.debug('%s: batch_size:              %s',self.name,self.batch_size)
       logger.debug('%s: n_classes:               %s',self.name,self.n_classes)
 
+   def get_event_data(self,file_index):
+      file_content = np.load(self.filelist[file_index])
+      event = self.importSparse2DenseTensor(file_content[0])
+      truth = file_content[2]
+      return event,truth
+
+
+   # Convert a list of scipy sparse arrays in csr format to a 3D sparse tensorflow Tensor
+   # sparse_matrices: list of sparse scipy arrays
+   def importSparse2DenseTensor(self, sparse_matrices):
+      dense_mats = []
+      for i, s_mat in enumerate(sparse_matrices):
+         dns = np.array(s_mat.todense())
+         dense_mats.append(dns)
+      return np.stack(dense_mats)  # tf.sparse_to_dense(new_indices, shape, np.concatenate(new_data)).eval()
 
    def __len__(self):
       return self.num_batches
@@ -87,7 +103,7 @@ class BatchGenerator(Sequence):
          # prepare output variables:
 
          # input images (1 is there for the 1 channel, in 3D CNN)
-         x_batch = np.zeros((self.batch_size, 1, self.n_chan, self.img_h, self.img_w))
+         x_batch = []
          # desired network output
          y_batch = np.zeros((self.batch_size, self.n_classes))
          
@@ -96,65 +112,24 @@ class BatchGenerator(Sequence):
          # calculate which file needed based on list of files, events per file,
          # ad which batch index
 
-         epoch_image_index = batch_index * self.batch_size
+         file_index = batch_index * self.batch_size
 
-         file_index = int(epoch_image_index / self.evts_per_file)
-         if file_index >= len(self.filelist):
-            raise Exception('{0}: file_index {1} is outside range for filelist {2}'.format(self.name,file_index,len(self.filelist)))
          
-         image_index = epoch_image_index % self.evts_per_file
-         
-         logger.error('%s: opening file with idx %s batch_index %s file_index %s image_index %s epoch_image_index %s',self.name,
+         logger.error('%s: opening file with idx %s file_index %s',self.name,
                idx,
-               batch_index,
-               file_index,
-               image_index,
-               epoch_image_index)
+               file_index)
 
-         ######
-         # open the file
-         if self.current_file_index != file_index or self.images is None:
-            logger.debug('%s: new file opening %s %s',self.name,self.current_file_index,file_index)
-            self.current_file_index = file_index
-            file_content = np.load(self.filelist[self.current_file_index])
-            self.images = file_content['raw']
-            self.truth_classes = file_content['truth'][...,CLASS_START:]
-            logger.debug('%s: shape images %s truth %s',self.name,self.images.shape,self.truth_classes.shape)
-         else:
-            logger.debug('%s: not opening file  %s %s',self.name,self.current_file_index,file_index)
-         
-            
 
          ########
          # loop over the batch size
          # create the outputs
          for i in range(self.batch_size):
-            logger.debug('%s: loop %s start',self.name,i)
 
-            # if our image index has gone past the number
-            # of images per file, then open the next file
-            if image_index >= self.evts_per_file:
-               logger.debug('%s: new file opening %s',self.name,self.current_file_index)
-               self.current_file_index += 1
-               
-               if self.current_file_index >= len(self.filelist):
-                  self.on_epoch_end()
-                  self.current_file_index = 0
-
-               file_content = np.load(self.filelist[self.current_file_index])
-               self.images = file_content['raw']
-               self.truth_classes = file_content['truth'][...,CLASS_START:]
-               logger.debug('%s: shape images %s truth %s',self.name,self.images.shape,self.truth_classes.shape)
-               image_index = 0
-
-            logger.debug('%s: image_index = %s  file_index = %s',self.name,image_index,self.current_file_index)
+            evt,truth = self.get_event_data(file_index + i)
 
             # get the image and boxes, must reshape image to include a channel in the case of 3D
-            x_batch[i] = np.reshape(self.images[image_index],(1,self.n_chan, self.img_h, self.img_w))
-            y_batch[i] = self.truth_classes[image_index]
-
-            # increase instance counter in current batch
-            image_index += 1
+            x_batch.append(evt)
+            y_batch[i] = truth[...,CLASS_START:]
 
          end = time.time()
          average_read_time = (end - start) / self.batch_size
@@ -167,7 +142,7 @@ class BatchGenerator(Sequence):
 
          # print(' new batch created', idx)
 
-         return x_batch, y_batch
+         return np.stack(x_batch), y_batch
       except Exception as e:
          logger.exception('%s: caught exception %s',self.name,str(e))
          raise

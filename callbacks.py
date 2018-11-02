@@ -1,12 +1,21 @@
+import time,logging
 from keras import callbacks
 from keras import backend as K
 import tensorflow as tf
+logger = logging.getLogger()
+
+last_time = time.time()
+
 
 class TB2(callbacks.TensorBoard):
 
    def on_batch_end(self,batch,logs=None):
+      global last_time
+      logger.debug('on_batch_end: time %s',time.time() - last_time)
+      last_time = time.time()
       logs.update({'lr': K.eval(self.model.optimizer.lr)})
       super(TB2,self).on_batch_end(batch, logs)
+
 
 class TB(callbacks.TensorBoard):
    def __init__(self, log_every=1, **kwargs):
