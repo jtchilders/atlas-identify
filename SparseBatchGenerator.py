@@ -25,7 +25,7 @@ CLASS_START = 5
 CLASS_END = 10
 
 
-class BatchGenerator(Sequence):
+class SparseBatchGenerator(Sequence):
    def __init__(self,config,filelist,seed=None,name=''):
 
       self.config          = config
@@ -103,7 +103,7 @@ class BatchGenerator(Sequence):
          # prepare output variables:
 
          # input images (1 is there for the 1 channel, in 3D CNN)
-         x_batch = []
+         x_batch = np.zeros((self.batch_size,1) + self.image_shape)
          # desired network output
          y_batch = np.zeros((self.batch_size, self.n_classes))
          
@@ -128,12 +128,12 @@ class BatchGenerator(Sequence):
             evt,truth = self.get_event_data(file_index + i)
 
             # get the image and boxes, must reshape image to include a channel in the case of 3D
-            x_batch.append(evt)
+            x_batch[i,0,...] = np.array(evt)
             y_batch[i] = truth[...,CLASS_START:]
 
          end = time.time()
          average_read_time = (end - start) / self.batch_size
-
+         
          logger.debug('%s: x_batch = %s',self.name,np.sum(x_batch))
          logger.debug('%s: y_batch = %s',self.name,np.sum(y_batch))
          logger.debug('%s: x_batch shape = %s',self.name,x_batch.shape)
@@ -142,7 +142,7 @@ class BatchGenerator(Sequence):
 
          # print(' new batch created', idx)
 
-         return np.stack(x_batch), y_batch
+         return x_batch, y_batch
       except Exception as e:
          logger.exception('%s: caught exception %s',self.name,str(e))
          raise
