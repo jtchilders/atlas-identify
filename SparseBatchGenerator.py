@@ -25,7 +25,7 @@ CLASS_START = 5
 CLASS_END = 10
 
 
-class BatchGenerator(Sequence):
+class SparseBatchGenerator(Sequence):
    def __init__(self,config,filelist,seed=None,name=''):
 
       self.config          = config
