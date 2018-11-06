@@ -93,6 +93,9 @@ def main():
       logging.basicConfig(level=log_level,format='%(asctime)s %(levelname)s:' + '{:05d}'.format(rank) + ':%(name)s:%(process)s:%(thread)s:%(message)s')
       logger.info('ml_comm from: %s',mc.__file__)
       logger.info("Rank: %s of %s",rank,nranks)
+   else:
+      logging.basicConfig(level=log_level,format='%(asctime)s %(levelname)s:%(name)s:%(process)s:%(thread)s:%(message)s')
+      logger.info('no MPI run')
 
 
    logger.info('keras from:            %s',keras.__file__)
@@ -124,7 +127,7 @@ def main():
 
    # set learning rate
    if args.horovod:
-      learning_rate = config_file['training']['learning_rate'] * hvd.size()
+      learning_rate = config_file['training']['learning_rate'] # * hvd.size()
    else:
       learning_rate = config_file['training']['learning_rate']
    logger.info('learning_rate:         %s',learning_rate)
@@ -143,6 +146,14 @@ def main():
 
    logger.info('train_gen:             %s',len(train_gen))
    logger.info('valid_gen:             %s',len(valid_gen))
+
+   if len(train_gen) <= 0:
+      logger.error('no batches in train generator')
+      raise Exception('no batches in train generator')
+   if len(valid_gen) <= 0:
+      logger.error('no batches in valid generator')
+      raise Exception('no batches in valid generator')
+
 
    # pass configuration to loss function
    loss_func.set_config(config_file)
@@ -276,9 +287,9 @@ def main():
           verbose = 0
    else:
       os.makedirs(log_path)
-
+      verbose = config_file['training']['verbose']
       checkpoint = ModelCheckpoint(config_file['model_pars']['model_checkpoint_file'].format(date=dateString),
-                     monitor='val_loss',
+                     monitor='loss',
                      verbose=1,
                      save_best_only=True,
                      mode='min',
@@ -287,14 +298,7 @@ def main():
 
       # create tensorboard callback
       # create tensorboard callback
-      '''
-      tensorboard = TB(log_dir=log_path,
-                     histogram_freq=config_file['tensorboard']['histogram_freq'],
-                     write_graph=config_file['tensorboard']['write_graph'],
-                     write_images=config_file['tensorboard']['write_images'],
-                     write_grads=config_file['tensorboard']['write_grads'],
-                     embeddings_freq=config_file['tensorboard']['embeddings_freq'])
-      '''
+      
       tensorboard = TB2(log_dir=log_path,update_freq='batch')
       callbacks.append(tensorboard)
 
@@ -336,6 +340,8 @@ def get_image_generators(config_file,args):
    if args.num_files > 0:
       nfiles = args.num_files
 
+   nbatches = int(nfiles*config_file['data_handling']['evt_per_file'] / config_file['training']['batch_size'])
+
    train_file_index = int(config_file['data_handling']['training_to_validation_ratio'] * nfiles)
    np.random.shuffle(filelist)
 
@@ -344,14 +350,30 @@ def get_image_generators(config_file,args):
       Generator = SparseBatchGenerator
 
    train_imgs = filelist[:train_file_index]
-   train_gen = Generator(config_file,train_imgs,name='train')
    valid_imgs = filelist[train_file_index:nfiles]
+   logger.info('training index: %s',train_file_index)
+   while len(valid_imgs) * config_file['data_handling']['evt_per_file'] / config_file['training']['batch_size'] < 1.:
+      logger.info('training index: %s',train_file_index)
+      train_file_index -= 1
+      train_imgs = filelist[:train_file_index]
+      valid_imgs = filelist[train_file_index:nfiles]
+         
+
+   train_gen = Generator(config_file,train_imgs,name='train')
    valid_gen = Generator(config_file,valid_imgs,name='valid')
 
    logger.info(' %s training batches; %s validation batches',len(train_gen),len(valid_gen))
 
    return train_gen,valid_gen
 
+
+def xaccuracy(y_true,y_pred):
+
+   y_true_index = tf.argmax(y_true,axis=-1)
+   y_pred_index = tf.argmax(y_pred,axis=-1)
+   #y_true_index = keras_backend.print_tensor(y_true_index,message='y_true_index:\t')
+   #y_pred_index = keras_backend.print_tensor(y_pred_index,message='y_pred_index:\t')
+   return tf.reduce_sum(tf.to_float(y_true_index == y_pred_index))
 
 if __name__ == "__main__":
    print('start main')
