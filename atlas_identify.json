@@ -1,6 +1,6 @@
 {
    "data_handling": {
-      "input_file_glob":               "/projects/atlasMLbjets/parton/numpy_data/atlasworf_*_100GEV_0ETA_0PHI_YOLO/*.npz",
+      "input_file_glob":               "/lcrc/group/ATLAS/atlasfs/local/rwang/ML/mldata/atlasworf_100GEV_0ETA_0PHI/csv/bjets/*",
       "evt_per_file":                  8,
       "image_shape":                   [16, 48, 1152],
       "training_to_validation_ratio":  0.8,

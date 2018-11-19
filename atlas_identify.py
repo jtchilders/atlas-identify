@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import os,argparse,logging,json,glob,datetime
 import numpy as np
-import models
+import models,nn_models,multi_cnn_models
 from BatchGenerator import BatchGenerator
 from SparseBatchGenerator import SparseBatchGenerator
 import loss_func
@@ -42,8 +42,6 @@ def main():
                        help='use Cray PE ML Plugin',action='store_true')
    parser.add_argument('--num_files','-n', default=-1, type=int,
                        help='limit the number of files to process. default is all')
-   parser.add_argument('--lr', default=0.01, type=int,
-                       help='learning rate')
    parser.add_argument('--num_intra', type=int,default=4,
                        help='num_intra')
    parser.add_argument('--num_inter', type=int,default=1,
@@ -105,7 +103,6 @@ def main():
    logger.info('tb_logdir:             %s',args.tb_logdir)
    logger.info('horovod:               %s',args.horovod)
    logger.info('num_files:             %s',args.num_files)
-   logger.info('lr:                    %s',args.lr)
    logger.info('num_intra:             %s',args.num_intra)
    logger.info('kmp_blocktime:         %s',args.kmp_blocktime)
    logger.info('kmp_affinity:          %s',args.kmp_affinity)
@@ -126,11 +123,11 @@ def main():
    config_file['sparse'] = args.sparse
 
    # set learning rate
-   if args.horovod:
-      learning_rate = config_file['training']['learning_rate'] # * hvd.size()
-   else:
-      learning_rate = config_file['training']['learning_rate']
-   logger.info('learning_rate:         %s',learning_rate)
+   logger.info('learning_rate:         %s',config_file['training']['learning_rate'])
+   logger.info('beta_1:                %s',config_file['training']['beta_1'])
+   logger.info('beta_2:                %s',config_file['training']['beta_2'])
+   logger.info('epsilon:               %s',config_file['training']['epsilon'])
+   logger.info('decay:                 %s',config_file['training']['decay'])
 
    if args.timeline:
       from tensorflow.python.client import timeline
@@ -139,7 +136,7 @@ def main():
    keras_backend.set_session(tf.Session(config=config_proto))
 
    # build model
-   model = models.build_model3D(config_file,args,print_summary=(rank == 0))
+   model = multi_cnn_models.build_model(config_file,args,print_summary=(rank == 0))
 
    # get inputs
    train_gen,valid_gen = get_image_generators(config_file,args)
@@ -160,8 +157,16 @@ def main():
 
    # create optmization function
 
-   logger.debug('create Adam')
-   optimizer = optimizers.Adam(lr=learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
+   logger.debug('create optimizer')
+   
+   optimizer = optimizers.rmsprop(lr=config_file['training']['learning_rate'], decay=config_file['training']['decay'])
+   '''
+   optimizer = optimizers.Adam(lr=config_file['training']['learning_rate'],
+                        beta_1=config_file['training']['beta_1'],
+                        beta_2=config_file['training']['beta_2'],
+                        epsilon=config_file['training']['epsilon'],
+                        decay=config_file['training']['decay'])
+   '''
 
    if args.horovod:
       logger.debug('create horovod optimizer')
@@ -176,7 +181,7 @@ def main():
       run_metadata = tf.RunMetadata()
       model.compile(loss=loss_func.loss2, optimizer=optimizer, options=run_options, run_metadata=run_metadata)
    else:
-      model.compile(loss='categorical_crossentropy', optimizer=optimizer)
+      model.compile(loss='categorical_crossentropy', optimizer=optimizer,metrics=['accuracy'])
 
    # To use Cray Plugin we need to calculate the number of trainable variables
    # Also useful to adjust number of epochs run
@@ -253,7 +258,7 @@ def main():
                         write_grads=config_file['tensorboard']['write_grads'],
                         embeddings_freq=config_file['tensorboard']['embeddings_freq'])
          '''
-         tensorboard = TB2(log_dir=log_path,update_freq='batch')
+         tensorboard = TB2(config_file,log_dir=log_path,update_freq='batch')
          callbacks.append(tensorboard)
 
          
@@ -273,7 +278,7 @@ def main():
           os.makedirs(log_path)
 
           # create tensorboard callback
-          tensorboard = TB2(log_dir=log_path,update_freq='batch')
+          tensorboard = TB2(config_file,log_dir=log_path,update_freq='batch')
           callbacks.append(tensorboard)
 
           checkpoint = ModelCheckpoint(config_file['model_pars']['model_checkpoint_file'].format(date=dateString),
@@ -299,7 +304,7 @@ def main():
       # create tensorboard callback
       # create tensorboard callback
       
-      tensorboard = TB2(log_dir=log_path,update_freq='batch')
+      tensorboard = TB2(config_file,log_dir=log_path,update_freq='batch')
       callbacks.append(tensorboard)
 
 

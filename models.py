@@ -2,7 +2,7 @@ import logging
 from keras.layers import Conv2D, Conv3D, Input, MaxPooling2D, MaxPooling3D
 from keras.layers import Dense, BatchNormalization, Reshape, Flatten, Dropout
 from keras.layers import Activation
-from keras.models import Model
+from keras.models import Model,Sequential
 from keras.layers.advanced_activations import LeakyReLU
 from keras.layers.merge import concatenate
 
@@ -170,6 +170,73 @@ def build_model3D(config,args,print_summary=True):
    return model
 
 
+def build_cifar10_3d(config,args,print_summary=True):
+   
+   input_image = Input(shape=tuple([1] + config['data_handling']['image_shape']))
+   layer_num = 0
+
+   logger.info('input_image: %s',input_image.shape)
+
+   output = Conv3D(128,(4,4,4),strides=(1,1,1),padding='same',name='conv3d_{0}'.format(layer_num),use_bias=False,data_format='channels_first')(input_image)
+   output = Activation('relu',name='relu_{0}'.format(layer_num))(output)
+   output = MaxPooling3D(pool_size=(1,1,2), data_format='channels_first',name='pool_{0}'.format(layer_num))(output)
+   layer_num += 1
+   output = Conv3D(128,(6,6,6),strides=(1,1,1),padding='same',name='conv3d_{0}'.format(layer_num),use_bias=False,data_format='channels_first')(output)
+   output = Activation('relu',name='relu_{0}'.format(layer_num))(output)
+   output = MaxPooling3D(pool_size=(1,1,2), data_format='channels_first',name='pool_{0}'.format(layer_num))(output)
+   output = Dropout(0.25,name='dropout_{0}'.format(layer_num))(output)
+   
+   layer_num += 1
+   output = Conv3D(64,(6,6,6),strides=(1,1,1),padding='same',name='conv3d_{0}'.format(layer_num),use_bias=False,data_format='channels_first')(output)
+   output = Activation('relu',name='relu_{0}'.format(layer_num))(output)
+   layer_num += 1
+   output = Conv3D(64,(6,6,6),strides=(1,1,1),padding='same',name='conv3d_{0}'.format(layer_num),use_bias=False,data_format='channels_first')(output)
+   output = Activation('relu',name='relu_{0}'.format(layer_num))(output)
+   output = MaxPooling3D(pool_size=(2,2,4), data_format='channels_first',name='pool_{0}'.format(layer_num))(output)
+   output = Dropout(0.25,name='dropout_{0}'.format(layer_num))(output)
+   
+   layer_num += 1
+   output = Conv3D(32,(3,3,3),strides=(1,1,1),padding='same',name='conv3d_{0}'.format(layer_num),use_bias=False,data_format='channels_first')(output)
+   output = Activation('relu',name='relu_{0}'.format(layer_num))(output)
+   layer_num += 1
+   output = Conv3D(32,(3,3,3),strides=(1,1,1),padding='same',name='conv3d_{0}'.format(layer_num),use_bias=False,data_format='channels_first')(output)
+   output = Activation('relu',name='relu_{0}'.format(layer_num))(output)
+   output = MaxPooling3D(pool_size=(1,2,4), data_format='channels_first',name='pool_{0}'.format(layer_num))(output)
+   output = Dropout(0.25,name='dropout_{0}'.format(layer_num))(output)
+
+   # layer_num += 1
+   # output = Conv3D(128,(3,3,3),strides=(1,1,1),padding='same',name='conv3d_{0}'.format(layer_num),use_bias=False,data_format='channels_first')(output)
+   # output = Activation('relu',name='relu_{0}'.format(layer_num))(output)
+   # layer_num += 1
+   # output = Conv3D(128,(3,3,3),strides=(1,1,1),padding='same',name='conv3d_{0}'.format(layer_num),use_bias=False,data_format='channels_first')(output)
+   # output = Activation('relu',name='relu_{0}'.format(layer_num))(output)
+   # output = MaxPooling3D(pool_size=(2,2,4), data_format='channels_first',name='pool_{0}'.format(layer_num))(output)
+   # output = Dropout(0.25,name='dropout_{0}'.format(layer_num))(output)
+
+
+
+   layer_num += 1
+   output = Flatten(name='flatter_{0}'.format(layer_num))(output)
+   output = Dense(512,name='dense_{0}'.format(layer_num))(output)
+   output = Activation('relu',name='relu_{0}'.format(layer_num))(output)
+   output = Dropout(0.5,name='dropout_{0}'.format(layer_num))(output)
+   layer_num += 1
+   output = Dense(len(config['data_handling']['classes']),name='dense_{0}'.format(layer_num))(output)
+   output = Activation('softmax',name='softmax_{0}'.format(layer_num))(output)
+
+   model = Model(input_image,output)
+
+   if print_summary:
+      if args.horovod:
+         import horovod.keras as hvd
+         if hvd.rank() == 0:
+            model.summary()
+      else:
+         model.summary()
+
+   return model
+
+
 def CBL_layer(input,
             filters=32,
             window=(3,3),
@@ -267,6 +334,7 @@ def CBLP_layer3D(input,
             )
    x = MaxPooling3D(pool_size=pool_size, data_format=data_format,name='pool_{0}'.format(layer_num))(x)
    return x
+
 
 def Dense_layer(input,
                 width=4096,
