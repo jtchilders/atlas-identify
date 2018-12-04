@@ -1,20 +1,27 @@
 #!/usr/bin/env python
 import os,argparse,logging,json,glob,datetime
 import numpy as np
-import models,nn_models,multi_cnn_models
+import models,nn_models,multi_cnn_models,pix_only_model
 from BatchGenerator import BatchGenerator
 from SparseBatchGenerator import SparseBatchGenerator
 import loss_func
 
 import keras
 from keras import optimizers
-from keras.callbacks import ModelCheckpoint
+from keras.callbacks import ModelCheckpoint,ReduceLROnPlateau,LearningRateScheduler
 from keras import backend as keras_backend
 from callbacks import TB2
 
 import tensorflow as tf
 print('done importing')
 logger = logging.getLogger(__name__)
+
+rates = []
+def lrsched(epoch):
+   try:
+      return rates[epoch]
+   except KeyError:
+      return rates[-1]
 
 
 
@@ -30,6 +37,7 @@ def create_config_proto(params):
 
 
 def main():
+   global rates
    ''' simple starter program that can be copied for use when starting a new script. '''
    parser = argparse.ArgumentParser(description='Atlas Training')
    parser.add_argument('--config_file', '-c',
@@ -56,10 +64,18 @@ def main():
                        help='number of batch workers in the fit_generator')
    parser.add_argument('--timeline',action='store_true',default=False,
                        help='enable chrome timeline profiling')
+   parser.add_argument('--adam',action='store_true',default=False,
+                       help='use adam optimizer')
+   parser.add_argument('--sgd',action='store_true',default=False,
+                       help='use SGD optimizer')
+   parser.add_argument('--lrsched',action='store_true',default=False,
+                       help='use learning rate scheduler')
    parser.add_argument('--timeline_filename',default='timeline_profile.json',
                        help='filename to use for timeline json data')
    parser.add_argument('--sparse', action='store_true',
                        help="Indicate that the input data is in sparse format")
+   parser.add_argument('--write_grads', action='store_true',
+                       help="Add gradient histograms to tensorboard")
    parser.add_argument('--random-seed', type=int,default=0,dest='random_seed',
                        help="Set the random number seed. This needs to be the same for all ranks to ensure the batch generator serves data properly.")
 
@@ -102,6 +118,9 @@ def main():
    logger.info('config_file:           %s',args.config_file)
    logger.info('tb_logdir:             %s',args.tb_logdir)
    logger.info('horovod:               %s',args.horovod)
+   logger.info('adam:                  %s',args.adam)
+   logger.info('sgd:                   %s',args.sgd)
+   logger.info('lrsched:               %s',args.lrsched)
    logger.info('num_files:             %s',args.num_files)
    logger.info('num_intra:             %s',args.num_intra)
    logger.info('kmp_blocktime:         %s',args.kmp_blocktime)
@@ -136,7 +155,8 @@ def main():
    keras_backend.set_session(tf.Session(config=config_proto))
 
    # build model
-   model = multi_cnn_models.build_model(config_file,args,print_summary=(rank == 0))
+   # model = multi_cnn_models.build_model(config_file,args,print_summary=(rank == 0))
+   model = pix_only_model.build_model(config_file,print_summary=(rank == 0))
 
    # get inputs
    train_gen,valid_gen = get_image_generators(config_file,args)
@@ -159,14 +179,21 @@ def main():
 
    logger.debug('create optimizer')
    
-   optimizer = optimizers.rmsprop(lr=config_file['training']['learning_rate'], decay=config_file['training']['decay'])
-   '''
-   optimizer = optimizers.Adam(lr=config_file['training']['learning_rate'],
+   optimizer = optimizers.rmsprop(lr=config_file['training']['learning_rate'],
+                        decay=config_file['training']['decay'])
+   
+   if args.adam:
+      optimizer = optimizers.Adam(lr=config_file['training']['learning_rate'],
                         beta_1=config_file['training']['beta_1'],
                         beta_2=config_file['training']['beta_2'],
                         epsilon=config_file['training']['epsilon'],
                         decay=config_file['training']['decay'])
-   '''
+   elif args.sgd:
+      optimizer = optimizers.SGD(lr=config_file['training']['learning_rate'],
+         momentum=0.0, decay=config_file['training']['decay'], nesterov=False)
+
+   logger.info('optimizer: %s',str(optimizer))
+   
 
    if args.horovod:
       logger.debug('create horovod optimizer')
@@ -181,7 +208,27 @@ def main():
       run_metadata = tf.RunMetadata()
       model.compile(loss=loss_func.loss2, optimizer=optimizer, options=run_options, run_metadata=run_metadata)
    else:
-      model.compile(loss='categorical_crossentropy', optimizer=optimizer,metrics=['accuracy'])
+      model.compile(loss=loss_func.binary_crossentropy, optimizer=optimizer,
+                     metrics=[binary_sum_squares,ave_pred,predaccuracy])
+
+
+   # try to add gradient histograms
+   if args.write_grads:
+      for layer in model.layers:
+         for weight in layer.weights:
+            mapped_weight_name = weight.name.replace(':', '_')
+            tf.summary.histogram(mapped_weight_name, weight)
+            grads = model.optimizer.get_gradients(model.total_loss,weight)
+
+            def is_indexed_slices(grad):
+                return type(grad).__name__ == 'IndexedSlices'
+            grads = [
+                grad.values if is_indexed_slices(grad) else grad
+                for grad in grads
+               ]
+            tf.summary.histogram('{}_grad'.format(mapped_weight_name),
+                                                grads)
+
 
    # To use Cray Plugin we need to calculate the number of trainable variables
    # Also useful to adjust number of epochs run
@@ -216,10 +263,9 @@ def main():
 
    callbacks = []
 
-   # add stepwise learning rate
-   # lrate = LearningRateScheduler(loss_func.step_decay)
-   # callbacks.append(lrate)
-   
+   if args.lrsched:
+      rates = config_file['training']['lrsched']
+      callbacks.append(LearningRateScheduler(lrsched,verbose=1))
 
    verbose = config_file['training']['verbose']
    if args.horovod:
@@ -237,6 +283,7 @@ def main():
 
       
       
+
       if rank == 0:
          verbose = config_file['training']['verbose']
          os.makedirs(log_path)
@@ -250,14 +297,6 @@ def main():
          callbacks.append(checkpoint)
 
          # create tensorboard callback
-         '''
-         tensorboard = TB(log_dir=log_path,
-                        histogram_freq=config_file['tensorboard']['histogram_freq'],
-                        write_graph=config_file['tensorboard']['write_graph'],
-                        write_images=config_file['tensorboard']['write_images'],
-                        write_grads=config_file['tensorboard']['write_grads'],
-                        embeddings_freq=config_file['tensorboard']['embeddings_freq'])
-         '''
          tensorboard = TB2(config_file,log_dir=log_path,update_freq='batch')
          callbacks.append(tensorboard)
 
@@ -346,7 +385,7 @@ def get_image_generators(config_file,args):
       nfiles = args.num_files
 
    nbatches = int(nfiles*config_file['data_handling']['evt_per_file'] / config_file['training']['batch_size'])
-
+   
    train_file_index = int(config_file['data_handling']['training_to_validation_ratio'] * nfiles)
    np.random.shuffle(filelist)
 
@@ -371,14 +410,23 @@ def get_image_generators(config_file,args):
 
    return train_gen,valid_gen
 
+# for binary case
+def predaccuracy(y_true,y_pred):
+   y_pred_bool = tf.to_float(y_pred > 0.7)
+   correct = tf.to_float(y_pred_bool == y_true)
+   predac = tf.reduce_sum(correct) / tf.to_float(tf.shape(y_true)[0])
+   predac = tf.Print(predac,[predac,y_true,y_pred],'predac,y_true,y_pred = ',-1,1000)
+   return predac
 
-def xaccuracy(y_true,y_pred):
+def ave_pred(y_true,y_pred):
+   ave = tf.reduce_sum(y_pred) / tf.to_float(tf.shape(y_pred)[0])
+   return ave
 
-   y_true_index = tf.argmax(y_true,axis=-1)
-   y_pred_index = tf.argmax(y_pred,axis=-1)
-   #y_true_index = keras_backend.print_tensor(y_true_index,message='y_true_index:\t')
-   #y_pred_index = keras_backend.print_tensor(y_pred_index,message='y_pred_index:\t')
-   return tf.reduce_sum(tf.to_float(y_true_index == y_pred_index))
+# for binary case
+def binary_sum_squares(y_true,y_pred):
+   diff_sum = tf.reduce_sum(tf.square(y_true - y_pred)) / tf.to_float(tf.shape(y_true)[0])
+   diff_sum = tf.Print(diff_sum,[diff_sum,y_true,y_pred],'binary_sum_sq,y_true,y_pred = ',-1,1000)
+   return diff_sum
 
 if __name__ == "__main__":
    print('start main')

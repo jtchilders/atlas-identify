@@ -10,22 +10,25 @@ last_time = time.time()
 class TB2(callbacks.TensorBoard):
    
    def __init__(self,config,**kwargs):
-        self.config = config
-        # self.beta_1=self.config['training']['beta_1']
-        # self.beta_2=self.config['training']['beta_2']
-        super(TB2,self).__init__(**kwargs)
+      self.config = config
+      self.beta_1 = self.config['training']['beta_1']
+      self.beta_2 = self.config['training']['beta_2']
+      super(TB2,self).__init__(**kwargs)
 
    def on_batch_end(self,batch,logs=None):
       global last_time
       logger.debug('on_batch_end: time %s',time.time() - last_time)
       last_time = time.time()
       lr = self.model.optimizer.lr
-      # decay = self.model.optimizer.decay
-      # iterations = self.model.optimizer.iterations
-      # lrd = lr * (1. / (1. + decay * tf.to_float(iterations)))
-      # t = K.cast(iterations, K.floatx()) + 1
-      # lr_t = lrd * (K.sqrt(1. - K.pow(self.beta_2, t)) /(1. - K.pow(self.beta_1, t)))
-      logs.update({'lr': K.eval(lr)})  # ,'lr_t': K.eval(lr_t),'lrd': K.eval(lrd)})
+      decay = self.model.optimizer.decay
+      iterations = self.model.optimizer.iterations
+      lrd = lr * (1. / (1. + decay * tf.to_float(iterations)))
+      t = K.cast(iterations, K.floatx()) + 1
+      lr_t = lrd * (K.sqrt(1. - K.pow(self.beta_2, t)) / (1. - K.pow(self.beta_1, t)))
+      logs.update({'lr': K.eval(lr),'lr_t': K.eval(lr_t),'lrd': K.eval(lrd)})
+
+      
+      
       super(TB2,self).on_batch_end(batch, logs)
 
 

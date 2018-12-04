@@ -36,9 +36,13 @@ class BatchGenerator(Sequence):
       logger.info('%s: found %s input files',self.name,len(self.filelist))
       if len(self.filelist) < 1:
          raise Exception('%s: length of file list needs to be at least 1' % self.name)
-      logger.error('%s: first file: %s',self.name,self.filelist[0])
+      # logger.error('%s: first file: %s',self.name,self.filelist[0])
 
       self.shuffle = self.config['data_handling']['shuffle']
+      if self.shuffle:
+         tmplist = np.array(self.filelist)
+         np.random.shuffle(tmplist)
+         self.filelist = tmplist.tolist()
 
       self.n_chan,self.img_h,self.img_w = tuple(config['data_handling']['image_shape'])
    
@@ -61,6 +65,14 @@ class BatchGenerator(Sequence):
       logger.debug('%s: nevts:                   %s',self.name,self.nevts)
       logger.debug('%s: batch_size:              %s',self.name,self.batch_size)
       logger.debug('%s: n_classes:               %s',self.name,self.n_classes)
+
+      self.categorical_crossentropy = False
+      if self.categorical_crossentropy:
+         self.bjet = np.zeros((self.n_classes))
+         self.bjet[0] = 1
+         self.other = np.zeros((self.n_classes))
+         self.other[1] = 1
+      
 
 
    def __len__(self):
@@ -89,7 +101,7 @@ class BatchGenerator(Sequence):
          # input images (1 is there for the 1 channel, in 3D CNN)
          x_batch = np.zeros((self.batch_size, 1, self.n_chan, self.img_h, self.img_w))
          # desired network output
-         y_batch = np.zeros((self.batch_size, self.n_classes))
+         y_batch = np.zeros((self.batch_size))
          
 
          ##########
@@ -104,25 +116,26 @@ class BatchGenerator(Sequence):
          
          image_index = epoch_image_index % self.evts_per_file
          
-         logger.error('%s: opening file with idx %s batch_index %s file_index %s image_index %s epoch_image_index %s',self.name,
-               idx,
-               batch_index,
-               file_index,
-               image_index,
-               epoch_image_index)
 
          ######
          # open the file
          if self.current_file_index != file_index or self.images is None:
             logger.debug('%s: new file opening %s %s',self.name,self.current_file_index,file_index)
             self.current_file_index = file_index
+            logger.debug('%s: opening file: %s',self.name,self.filelist[self.current_file_index])
             file_content = np.load(self.filelist[self.current_file_index])
             self.images = file_content['raw']
-            self.truth_classes = file_content['truth'][...,CLASS_START:]
-            logger.debug('%s: shape images %s truth %s',self.name,self.images.shape,self.truth_classes.shape)
-         else:
-            logger.debug('%s: not opening file  %s %s',self.name,self.current_file_index,file_index)
+            self.truth_classes = file_content['truth']
+            # logger.debug('%s: shape images %s truth %s',self.name,self.images.shape,self.truth_classes.shape)
+         # else:
+         #    logger.debug('%s: not opening file  %s %s',self.name,self.current_file_index,file_index)
          
+         logger.error('%s: opening file with idx %s batch_index %s file_index %s image_index %s epoch_image_index %s',self.name,
+               idx,
+               batch_index,
+               file_index,
+               image_index,
+               epoch_image_index)
             
 
          ########
@@ -141,17 +154,26 @@ class BatchGenerator(Sequence):
                   self.on_epoch_end()
                   self.current_file_index = 0
 
+               logger.debug('%s: opening file: %s',self.name,self.filelist[self.current_file_index])
                file_content = np.load(self.filelist[self.current_file_index])
                self.images = file_content['raw']
-               self.truth_classes = file_content['truth'][...,CLASS_START:]
-               logger.debug('%s: shape images %s truth %s',self.name,self.images.shape,self.truth_classes.shape)
+               self.truth_classes = file_content['truth']
+               # logger.debug('%s: shape images %s truth %s',self.name,self.images.shape,self.truth_classes.shape)
                image_index = 0
 
-            logger.debug('%s: image_index = %s  file_index = %s',self.name,image_index,self.current_file_index)
+            # logger.debug('%s: image_index = %s  file_index = %s',self.name,image_index,self.current_file_index)
 
             # get the image and boxes, must reshape image to include a channel in the case of 3D
             x_batch[i] = np.reshape(self.images[image_index],(1,self.n_chan, self.img_h, self.img_w))
-            y_batch[i] = self.truth_classes[image_index]
+            
+            # using categorical_crossentropy
+            if self.categorical_crossentropy:
+               if self.truth_classes[image_index][0][CLASS_START+3] == 1:
+                  y_batch[i] = self.bjet
+               else:
+                  y_batch[i] = self.other
+            else:
+               y_batch[i] = self.truth_classes[image_index][0][CLASS_START+3]
 
             # increase instance counter in current batch
             image_index += 1
@@ -160,10 +182,10 @@ class BatchGenerator(Sequence):
          average_read_time = (end - start) / self.batch_size
 
          logger.debug('%s: x_batch = %s',self.name,np.sum(x_batch))
-         logger.debug('%s: y_batch = %s',self.name,np.sum(y_batch))
+         logger.debug('%s: y_batch = %s',self.name,y_batch)
          logger.debug('%s: x_batch shape = %s',self.name,x_batch.shape)
-         logger.debug('%s: y_batch shape = %s',self.name,y_batch.shape)
-         logger.debug('%s: exiting ave read time: %10.4f, file_index = %s',self.name,average_read_time,self.current_file_index)
+         # logger.debug('%s: y_batch shape = %s',self.name,y_batch.shape)
+         logger.debug('%s: exiting ave read time: %10.4f',self.name,average_read_time)
 
          # print(' new batch created', idx)
 

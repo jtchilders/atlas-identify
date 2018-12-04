@@ -1,4 +1,5 @@
 from keras import backend as K
+from keras import losses
 import numpy as np
 
 using_tf = False
@@ -7,6 +8,18 @@ if 'tensorflow' in K.backend():
    using_tf = True
 
 config = None
+
+
+def binary_crossentropy(y_true,y_pred):
+   loss = losses.binary_crossentropy(y_true,y_pred)
+   loss = tf.Print(loss,[loss,y_true,y_pred],'> loss, y_true, y_pred =',-1,1000)
+   return loss
+
+
+def categorical_crossentropy(y_true,y_pred):
+   loss = losses.categorical_crossentropy(y_true,y_pred)
+   loss = tf.Print(loss,[loss,y_true,y_pred],'> loss, y_true, y_pred =',-1,1000)
+   return loss
 
 
 # learning rate schedule
