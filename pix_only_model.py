@@ -28,7 +28,7 @@ def build_model(config,print_summary=True):
    output = kl.Activation('relu')(output)
 
    output = Pooling3D((1,2,2))(output)
-   output = kl.Dropout(0.2)(output)
+   output = kl.Dropout(0.25)(output)
 
    output = Conv3D(256,(3,3,3))(output)
    output = kl.BatchNormalization()(output)
@@ -42,6 +42,7 @@ def build_model(config,print_summary=True):
    output = kl.Activation('relu')(output)
 
    output = Pooling3D((1,2,2))(output)
+   output = kl.Dropout(0.1)(output)
 
    output = Conv3D(1024,(3,3,3))(output)
    output = kl.BatchNormalization()(output)

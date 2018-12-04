@@ -412,8 +412,9 @@ def get_image_generators(config_file,args):
 
 # for binary case
 def predaccuracy(y_true,y_pred):
-   y_pred_bool = tf.to_float(y_pred > 0.7)
-   correct = tf.to_float(y_pred_bool == y_true)
+   y_pred_bool = y_pred > 0.7
+   y_true_bool = y_true > 0.7
+   correct = tf.to_float(tf.logical_and(y_pred_bool,y_true_bool))
    predac = tf.reduce_sum(correct) / tf.to_float(tf.shape(y_true)[0])
    predac = tf.Print(predac,[predac,y_true,y_pred],'predac,y_true,y_pred = ',-1,1000)
    return predac
